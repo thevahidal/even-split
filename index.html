@@ -1,0 +1,261 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
+<title>Even Split</title>
+<style>
+  html, body { margin: 0; height: 100%; overflow: hidden; background: #CFE8B5; font-family: ui-rounded, system-ui, sans-serif; -webkit-user-select: none; user-select: none; color: #24324A; }
+  canvas { display: block; touch-action: none; }
+  .hud { position: fixed; left: 14px; right: 14px; pointer-events: none; }
+  #top { top: max(12px, env(safe-area-inset-top)); display: flex; justify-content: space-between; align-items: center; gap: 8px; font-size: 18px; font-weight: 800; }
+  #top button { pointer-events: auto; height: 36px; padding: 0 14px; border: 0; border-radius: 18px; background: #fff; box-shadow: 0 3px 0 rgba(36,50,74,.25); color: #24324A; font: inherit; font-size: 15px; }
+  #hint { bottom: max(22px, env(safe-area-inset-bottom)); text-align: center; font-size: 15px; font-weight: 800; }
+  #hint span { display: inline-block; max-width: 100%; padding: 6px 14px; border-radius: 14px; background: rgba(36,50,74,.82); color: #fff; }
+  .overlay { position: fixed; inset: 0; display: none; align-items: center; justify-content: center; background: rgba(36,50,74,.55); }
+  .card { width: min(86vw, 330px); padding: 22px 18px; border-radius: 28px; background: #fff; text-align: center; box-shadow: 0 8px 0 #C6D2E3; }
+  .card h1 { margin: 0 0 6px; font-size: 30px; }
+  .card p { margin: 0 0 16px; font-size: 16px; font-weight: 600; color: #6B778C; }
+  .card button { width: 100%; height: 54px; border: 0; border-radius: 20px; background: #4CC26E; box-shadow: 0 6px 0 #2F9450; color: #fff; font: inherit; font-size: 21px; font-weight: 800; }
+</style>
+</head>
+<body>
+<canvas id="c"></canvas>
+<div id="top" class="hud"><button id="undo">Undo</button><div id="name"></div><button id="restart">Restart</button></div>
+<div id="hint" class="hud"><span></span></div>
+<div id="card" class="overlay"><div class="card"><h1 id="cardTitle"></h1><p id="cardText"></p><button id="cardBtn"></button></div></div>
+<script src="flow.js"></script>
+<script src="levels.js"></script>
+<script>
+const canvas = document.getElementById('c'), ctx = canvas.getContext('2d');
+const el = (id) => document.getElementById(id);
+const key = (x, y) => `${x},${y}`;
+const cellOf = (k) => k.split(',').map(Number);
+
+let levelIndex = 0, level, gate, houses, rocks, strokes, drawing, flow, solved;
+let W, H, cell, ox, oy;
+
+function load(i) {
+  levelIndex = i;
+  level = LEVELS[i];
+  gate = key(...level.gate);
+  houses = new Map(level.houses.map(([x, y, n, d]) => [key(x, y), { n, d }]));
+  rocks = new Set(level.rocks.map(([x, y]) => key(x, y)));
+  strokes = [];
+  drawing = null;
+  solved = false;
+  el('name').textContent = `${i + 1}/${LEVELS.length} · ${level.name}`;
+  say(level.hint);
+  resize();
+  update();
+}
+
+const allEdges = () => [...strokes.flat(), ...(drawing ? drawing.edges : [])];
+const nodesOf = (edges) => new Set([gate, ...edges.flat()]);
+const outCount = (k, edges) => edges.filter(([a]) => a === k).length;
+const inCount = (k, edges) => edges.filter(([, b]) => b === k).length;
+
+function update() {
+  flow = solveFlow(allEdges(), { [gate]: 1 });
+}
+
+function say(text) { el('hint').firstChild.textContent = text; }
+
+function startAt(k) {
+  if (solved) return;
+  const edges = allEdges();
+  if (k !== gate && (!nodesOf(edges).has(k) || houses.has(k))) return say('Start from the spring or a road');
+  if (outCount(k, edges) >= 2) return say('A road can split in two, never three');
+  drawing = { cells: [k], edges: [], done: false, before: nodesOf(edges) };
+}
+
+function stepTo(k) {
+  const { cells, edges } = drawing;
+  const last = cells[cells.length - 1];
+  if (k === cells[cells.length - 2]) {
+    cells.pop();
+    edges.pop();
+    drawing.done = false;
+    return true;
+  }
+  if (drawing.done) return false;
+  const [x, y] = cellOf(k);
+  if (x < 0 || y < 0 || x >= level.cols || y >= level.rows || rocks.has(k) || k === gate) return false;
+  const all = allEdges();
+  if (all.some(([a, b]) => (a === last && b === k) || (a === k && b === last))) return false;
+  const joins = houses.has(k) || drawing.before.has(k) || cells.includes(k);
+  edges.push([last, k]);
+  cells.push(k);
+  drawing.done = joins;
+  return true;
+}
+
+function dragTo(k) {
+  let guard = 50;
+  while (guard-- > 0) {
+    const [lx, ly] = cellOf(drawing.cells[drawing.cells.length - 1]);
+    const [tx, ty] = cellOf(k);
+    if (lx === tx && ly === ty) break;
+    const dx = tx - lx, dy = ty - ly;
+    const next = Math.abs(dx) >= Math.abs(dy) ? key(lx + Math.sign(dx), ly) : key(lx, ly + Math.sign(dy));
+    if (!stepTo(next)) break;
+  }
+  update();
+}
+
+function finish() {
+  const d = drawing;
+  drawing = null;
+  if (d.edges.length) {
+    if (trapped([...strokes.flat(), ...d.edges])) say('That water would go round forever');
+    else strokes.push(d.edges);
+  }
+  update();
+  checkWin();
+}
+
+function checkWin() {
+  if (!flow) return;
+  const ok = [...houses].every(([k, h]) => Math.abs((flow.water.get(k) || 0) - h.n / h.d) < 1e-7);
+  if (!ok) return;
+  solved = true;
+  const last = levelIndex === LEVELS.length - 1;
+  setTimeout(() => card('Even!', level.why, last ? 'Play again' : 'Next', () => load(last ? 0 : levelIndex + 1)), 700);
+}
+
+function card(title, text, btn, onClick) {
+  el('cardTitle').textContent = title;
+  el('cardText').textContent = text;
+  el('cardBtn').textContent = btn;
+  el('cardBtn').onclick = () => { el('card').style.display = 'none'; onClick(); };
+  el('card').style.display = 'flex';
+}
+
+el('undo').onclick = () => { if (!solved) { strokes.pop(); update(); say(level.hint); } };
+el('restart').onclick = () => load(levelIndex);
+
+function pointerCell(e) {
+  return key(Math.floor((e.clientX - ox) / cell), Math.floor((e.clientY - oy) / cell));
+}
+canvas.addEventListener('pointerdown', (e) => { canvas.setPointerCapture(e.pointerId); startAt(pointerCell(e)); });
+canvas.addEventListener('pointermove', (e) => { if (drawing) dragTo(pointerCell(e)); });
+canvas.addEventListener('pointerup', () => { if (drawing) finish(); });
+canvas.addEventListener('pointercancel', () => { if (drawing) finish(); });
+
+function resize() {
+  const dpr = window.devicePixelRatio || 1;
+  W = innerWidth; H = innerHeight;
+  canvas.width = W * dpr; canvas.height = H * dpr;
+  canvas.style.width = W + 'px'; canvas.style.height = H + 'px';
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  if (!level) return;
+  cell = Math.floor(Math.min((W - 28) / level.cols, (H - 150) / level.rows, 96));
+  ox = (W - cell * level.cols) / 2;
+  oy = 64 + (H - 150 - cell * level.rows) / 2;
+}
+addEventListener('resize', resize);
+
+const centre = (k) => { const [x, y] = cellOf(k); return [ox + (x + 0.5) * cell, oy + (y + 0.5) * cell]; };
+
+function line(a, b, width, colour) {
+  ctx.strokeStyle = colour;
+  ctx.lineWidth = width;
+  ctx.beginPath();
+  ctx.moveTo(...centre(a));
+  ctx.lineTo(...centre(b));
+  ctx.stroke();
+}
+
+function pill(x, y, text, bg, fg) {
+  ctx.font = `800 ${Math.round(cell * 0.2)}px ui-rounded, system-ui, sans-serif`;
+  const w = ctx.measureText(text).width + cell * 0.18, h = cell * 0.3;
+  ctx.fillStyle = bg;
+  ctx.beginPath();
+  ctx.roundRect(x - w / 2, y - h / 2, w, h, h / 2);
+  ctx.fill();
+  ctx.fillStyle = fg;
+  ctx.fillText(text, x, y + 1);
+}
+
+function draw(t) {
+  ctx.clearRect(0, 0, W, H);
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  ctx.lineCap = 'round';
+
+  ctx.fillStyle = 'rgba(36,50,74,.12)';
+  for (let x = 0; x < level.cols; x++) for (let y = 0; y < level.rows; y++) {
+    const [cx, cy] = centre(key(x, y));
+    ctx.beginPath(); ctx.arc(cx, cy, cell * 0.05, 0, 7); ctx.fill();
+  }
+  for (const k of rocks) {
+    const [cx, cy] = centre(k);
+    ctx.fillStyle = '#9AA7A0';
+    ctx.beginPath(); ctx.arc(cx, cy, cell * 0.36, 0, 7); ctx.fill();
+  }
+
+  const edges = allEdges();
+  for (const [a, b] of edges) line(a, b, cell * 0.46, '#B9A983');
+  for (const [a, b] of edges) line(a, b, cell * 0.38, '#EFE4C6');
+
+  if (flow) {
+    for (const [a, b] of edges) {
+      const f = flow.along(a);
+      if (f > 1e-9) line(a, b, cell * (0.07 + 0.24 * Math.min(f, 1.4)), '#3F86F5');
+    }
+    ctx.setLineDash([cell * 0.1, cell * 0.233]);
+    ctx.lineDashOffset = -t * 0.001 * cell * 1.2;
+    for (const [a, b] of edges) if (flow.along(a) > 1e-9) line(a, b, cell * 0.04, 'rgba(255,255,255,.75)');
+    ctx.setLineDash([]);
+
+    for (const [a, b] of edges) {
+      if (a !== gate && inCount(a, edges) === 1 && outCount(a, edges) === 1) continue;
+      const [ax, ay] = centre(a), [bx, by] = centre(b);
+      pill((ax + bx) / 2, (ay + by) / 2, fraction(flow.along(a)), '#fff', '#24324A');
+    }
+    const tip = drawing && drawing.cells[drawing.cells.length - 1];
+    for (const k of nodesOf(edges)) {
+      if (k === gate || houses.has(k) || k === tip || outCount(k, edges) > 0) continue;
+      const lost = flow.water.get(k) || 0;
+      if (lost < 1e-9) continue;
+      const [cx, cy] = centre(k);
+      ctx.fillStyle = 'rgba(63,134,245,.45)';
+      ctx.beginPath(); ctx.ellipse(cx, cy, cell * 0.3, cell * 0.2, 0, 0, 7); ctx.fill();
+      pill(cx, cy - cell * 0.32, `${fraction(lost)} lost`, '#F0524F', '#fff');
+    }
+  }
+
+  const [gx, gy] = centre(gate);
+  const ripple = (t * 0.0008) % 1;
+  ctx.strokeStyle = `rgba(63,134,245,${0.5 * (1 - ripple)})`;
+  ctx.lineWidth = 3;
+  ctx.beginPath(); ctx.arc(gx, gy, cell * (0.34 + 0.16 * ripple), 0, 7); ctx.stroke();
+  ctx.fillStyle = '#3F86F5';
+  ctx.beginPath(); ctx.arc(gx, gy, cell * 0.34, 0, 7); ctx.fill();
+  ctx.fillStyle = '#fff';
+  ctx.font = `800 ${Math.round(cell * 0.3)}px ui-rounded, system-ui, sans-serif`;
+  ctx.fillText('1', gx, gy + 1);
+
+  for (const [k, h] of houses) {
+    const [cx, cy] = centre(k), s = cell * 0.36;
+    const got = flow ? flow.water.get(k) || 0 : 0;
+    const right = Math.abs(got - h.n / h.d) < 1e-7;
+    ctx.fillStyle = '#fff';
+    ctx.beginPath(); ctx.roundRect(cx - s, cy - s * 0.55, s * 2, s * 1.45, s * 0.2); ctx.fill();
+    ctx.fillStyle = right ? '#4CC26E' : '#F0524F';
+    ctx.beginPath(); ctx.moveTo(cx - s * 1.15, cy - s * 0.45); ctx.lineTo(cx, cy - s * 1.25); ctx.lineTo(cx + s * 1.15, cy - s * 0.45); ctx.closePath(); ctx.fill();
+    ctx.fillStyle = '#24324A';
+    ctx.font = `800 ${Math.round(cell * 0.26)}px ui-rounded, system-ui, sans-serif`;
+    ctx.fillText(`${h.n}/${h.d}`, cx, cy + s * 0.18);
+    if (!right) pill(cx, cy + s * 1.25, `has ${fraction(got)}`, 'rgba(36,50,74,.82)', '#fff');
+  }
+
+  requestAnimationFrame(draw);
+}
+
+load(0);
+card('Even Split', 'Water splits evenly wherever a road forks. Give every house exactly its share.', 'Play', () => {});
+requestAnimationFrame(draw);
+</script>
+</body>
+</html>
