@@ -10,21 +10,26 @@
   .hud { position: fixed; left: 14px; right: 14px; pointer-events: none; }
   #top { top: max(12px, env(safe-area-inset-top)); display: flex; justify-content: space-between; align-items: center; gap: 8px; font-size: 18px; font-weight: 800; }
   #top button { pointer-events: auto; height: 36px; padding: 0 14px; border: 0; border-radius: 18px; background: #fff; box-shadow: 0 3px 0 rgba(36,50,74,.25); color: #24324A; font: inherit; font-size: 15px; }
-  #roads { position: fixed; top: max(56px, calc(env(safe-area-inset-top) + 44px)); left: 0; right: 0; text-align: center; font-size: 16px; font-weight: 800; pointer-events: none; }
+  #info { position: fixed; top: max(56px, calc(env(safe-area-inset-top) + 44px)); left: 0; right: 0; text-align: center; font-size: 16px; font-weight: 800; pointer-events: none; }
   #hint { bottom: max(22px, env(safe-area-inset-bottom)); text-align: center; font-size: 15px; font-weight: 800; }
   #hint span { display: inline-block; max-width: 100%; padding: 6px 14px; border-radius: 14px; background: rgba(36,50,74,.82); color: #fff; }
   .overlay { position: fixed; inset: 0; display: none; align-items: center; justify-content: center; background: rgba(36,50,74,.55); }
   .card { width: min(86vw, 330px); padding: 22px 18px; border-radius: 28px; background: #fff; text-align: center; box-shadow: 0 8px 0 #C6D2E3; }
   .card h1 { margin: 0 0 6px; font-size: 30px; }
   .card p { margin: 0 0 16px; font-size: 16px; font-weight: 600; color: #6B778C; }
+  #picker { display: grid; grid-template-columns: repeat(4, 1fr); gap: 9px; margin-bottom: 14px; }
+  #picker button { height: 54px; padding: 0; font-size: 21px; }
+  #close { background: #E9EEF5; box-shadow: 0 6px 0 #C6D2E3; color: #24324A; }
+  #picker button.done { background: #FFC233; box-shadow: 0 6px 0 #D19A12; color: #24324A; }
   .card button { width: 100%; height: 54px; border: 0; border-radius: 20px; background: #4CC26E; box-shadow: 0 6px 0 #2F9450; color: #fff; font: inherit; font-size: 21px; font-weight: 800; }
 </style>
 </head>
 <body>
 <canvas id="c"></canvas>
-<div id="top" class="hud"><button id="undo">Undo</button><div id="name"></div><button id="restart">Restart</button></div>
-<div id="roads"></div>
+<div id="top" class="hud"><button id="levels">Levels</button><span><button id="undo">Undo</button> <button id="restart">Restart</button></span></div>
+<div id="info"></div>
 <div id="hint" class="hud"><span></span></div>
+<div id="menu" class="overlay"><div class="card"><h1>Levels</h1><div id="picker"></div><button id="close">Back</button></div></div>
 <div id="card" class="overlay"><div class="card"><h1 id="cardTitle"></h1><p id="cardText"></p><button id="cardBtn"></button></div></div>
 <script src="flow.js"></script>
 <script src="levels.js"></script>
@@ -47,7 +52,6 @@ function load(i) {
   strokes = [];
   drawing = null;
   solved = false;
-  el('name').textContent = `${i + 1}/${LEVELS.length} · ${level.name}`;
   history.replaceState(null, '', `#${i + 1}`);
   say(level.hint);
   resize();
@@ -62,7 +66,7 @@ const inCount = (k, edges) => edges.filter(([, b]) => b === k).length;
 
 function update() {
   flow = solveFlow(allEdges(), { [gate]: 1 });
-  el('roads').textContent = level.roads ? `Road left: ${roadsLeft()}` : '';
+  el('info').textContent = `${levelIndex + 1}. ${level.name}` + (level.roads ? ` · Road left: ${roadsLeft()}` : '');
 }
 
 function say(text) { el('hint').firstChild.textContent = text; }
@@ -126,8 +130,9 @@ function checkWin() {
   const ok = [...houses].every(([k, h]) => Math.abs((flow.water.get(k) || 0) - h.n / h.d) < 1e-7);
   if (!ok) return;
   solved = true;
-  const last = levelIndex === LEVELS.length - 1;
-  setTimeout(() => card('Even!', level.why, last ? 'Play again' : 'Next', () => load(last ? 0 : levelIndex + 1)), 700);
+  try { localStorage.setItem(`even-split-${levelIndex}`, '1'); } catch {}
+  const i = levelIndex, last = i === LEVELS.length - 1;
+  setTimeout(() => solved && levelIndex === i && card('Even!', level.why, last ? 'Play again' : 'Next', () => load(last ? 0 : levelIndex + 1)), 700);
 }
 
 function card(title, text, btn, onClick) {
@@ -140,6 +145,19 @@ function card(title, text, btn, onClick) {
 
 el('undo').onclick = () => { if (!solved) { strokes.pop(); update(); say(level.hint); } };
 el('restart').onclick = () => load(levelIndex);
+el('close').onclick = () => { el('menu').style.display = 'none'; };
+el('levels').onclick = () => {
+  el('picker').innerHTML = '';
+  LEVELS.forEach((lv, i) => {
+    const b = document.createElement('button');
+    b.textContent = i + 1;
+    b.title = lv.name;
+    try { if (localStorage.getItem(`even-split-${i}`)) b.className = 'done'; } catch {}
+    b.onclick = () => { el('menu').style.display = 'none'; el('card').style.display = 'none'; load(i); };
+    el('picker').appendChild(b);
+  });
+  el('menu').style.display = 'flex';
+};
 
 function pointerCell(e) {
   return key(Math.floor((e.clientX - ox) / cell), Math.floor((e.clientY - oy) / cell));
