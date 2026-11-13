@@ -10,6 +10,7 @@
   .hud { position: fixed; left: 14px; right: 14px; pointer-events: none; }
   #top { top: max(12px, env(safe-area-inset-top)); display: flex; justify-content: space-between; align-items: center; gap: 8px; font-size: 18px; font-weight: 800; }
   #top button { pointer-events: auto; height: 36px; padding: 0 14px; border: 0; border-radius: 18px; background: #fff; box-shadow: 0 3px 0 rgba(36,50,74,.25); color: #24324A; font: inherit; font-size: 15px; }
+  #roads { position: fixed; top: max(56px, calc(env(safe-area-inset-top) + 44px)); left: 0; right: 0; text-align: center; font-size: 16px; font-weight: 800; pointer-events: none; }
   #hint { bottom: max(22px, env(safe-area-inset-bottom)); text-align: center; font-size: 15px; font-weight: 800; }
   #hint span { display: inline-block; max-width: 100%; padding: 6px 14px; border-radius: 14px; background: rgba(36,50,74,.82); color: #fff; }
   .overlay { position: fixed; inset: 0; display: none; align-items: center; justify-content: center; background: rgba(36,50,74,.55); }
@@ -22,6 +23,7 @@
 <body>
 <canvas id="c"></canvas>
 <div id="top" class="hud"><button id="undo">Undo</button><div id="name"></div><button id="restart">Restart</button></div>
+<div id="roads"></div>
 <div id="hint" class="hud"><span></span></div>
 <div id="card" class="overlay"><div class="card"><h1 id="cardTitle"></h1><p id="cardText"></p><button id="cardBtn"></button></div></div>
 <script src="flow.js"></script>
@@ -32,7 +34,7 @@ const el = (id) => document.getElementById(id);
 const key = (x, y) => `${x},${y}`;
 const cellOf = (k) => k.split(',').map(Number);
 
-let levelIndex = 0, level, gate, houses, rocks, strokes, drawing, flow, solved;
+let levelIndex = 0, level, gate, houses, rocks, built, strokes, drawing, flow, solved;
 let W, H, cell, ox, oy;
 
 function load(i) {
@@ -41,22 +43,26 @@ function load(i) {
   gate = key(...level.gate);
   houses = new Map(level.houses.map(([x, y, n, d]) => [key(x, y), { n, d }]));
   rocks = new Set(level.rocks.map(([x, y]) => key(x, y)));
+  built = (level.built || []).flatMap((s) => { const c = s.split(' '); return c.slice(1).map((k, j) => [c[j], k]); });
   strokes = [];
   drawing = null;
   solved = false;
   el('name').textContent = `${i + 1}/${LEVELS.length} · ${level.name}`;
+  history.replaceState(null, '', `#${i + 1}`);
   say(level.hint);
   resize();
   update();
 }
 
-const allEdges = () => [...strokes.flat(), ...(drawing ? drawing.edges : [])];
+const allEdges = () => [...built, ...strokes.flat(), ...(drawing ? drawing.edges : [])];
+const roadsLeft = () => (level.roads ?? Infinity) - strokes.flat().length - (drawing ? drawing.edges.length : 0);
 const nodesOf = (edges) => new Set([gate, ...edges.flat()]);
 const outCount = (k, edges) => edges.filter(([a]) => a === k).length;
 const inCount = (k, edges) => edges.filter(([, b]) => b === k).length;
 
 function update() {
   flow = solveFlow(allEdges(), { [gate]: 1 });
+  el('roads').textContent = level.roads ? `Road left: ${roadsLeft()}` : '';
 }
 
 function say(text) { el('hint').firstChild.textContent = text; }
@@ -83,6 +89,7 @@ function stepTo(k) {
   if (x < 0 || y < 0 || x >= level.cols || y >= level.rows || rocks.has(k) || k === gate) return false;
   const all = allEdges();
   if (all.some(([a, b]) => (a === last && b === k) || (a === k && b === last))) return false;
+  if (roadsLeft() <= 0) { say('Out of road. Undo to get some back'); return false; }
   const joins = houses.has(k) || drawing.before.has(k) || cells.includes(k);
   edges.push([last, k]);
   cells.push(k);
@@ -107,7 +114,7 @@ function finish() {
   const d = drawing;
   drawing = null;
   if (d.edges.length) {
-    if (trapped([...strokes.flat(), ...d.edges])) say('That water would go round forever');
+    if (trapped([...built, ...strokes.flat(), ...d.edges])) say('That water would go round forever');
     else strokes.push(d.edges);
   }
   update();
@@ -197,6 +204,8 @@ function draw(t) {
   const edges = allEdges();
   for (const [a, b] of edges) line(a, b, cell * 0.46, '#B9A983');
   for (const [a, b] of edges) line(a, b, cell * 0.38, '#EFE4C6');
+  for (const [a, b] of built) line(a, b, cell * 0.46, '#7D776B');
+  for (const [a, b] of built) line(a, b, cell * 0.36, '#C9C6BC');
 
   if (flow) {
     for (const [a, b] of edges) {
@@ -253,7 +262,7 @@ function draw(t) {
   requestAnimationFrame(draw);
 }
 
-load(0);
+load(Math.min(Math.max((parseInt(location.hash.slice(1)) || 1) - 1, 0), LEVELS.length - 1));
 card('Even Split', 'Water splits evenly wherever a road forks. Give every house exactly its share.', 'Play', () => {});
 requestAnimationFrame(draw);
 </script>
